@@ -47,7 +47,7 @@ def worker_serve(
     asyncio_server_kwargs=None,
     version=HTTP.VERSION_1,
     config: bytes | str | dict[str, Any] | Any | None = None,
-    passthru: dict[str, Any] | None = None,
+    passthru: dict[str, dict[str, Any]] | None = None,
 ):
     try:
         from sanic import Sanic
@@ -57,7 +57,15 @@ def worker_serve(
         else:
             app = Sanic.get_app(app_name)
 
-        app.refresh(passthru)
+        # Hydrate each application with the state it was prepared with
+        # in the main process. The passthru is a mapping of app name to
+        # that application's own state so that secondary applications
+        # do not inherit the primary application's configuration.
+        app.refresh(passthru.get(app.name) if passthru else None)
+        if passthru:
+            for name, app_passthru in passthru.items():
+                if name != app.name:
+                    Sanic.get_app(name).refresh(app_passthru)
         app.setup_loop()
         setup_logging(
             app.state.is_debug, app.config.NO_COLOR, app.config.LOG_EXTRA

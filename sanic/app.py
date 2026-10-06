@@ -1673,7 +1673,9 @@ class Sanic(
                 self.signal_router.reset()
             yield
             if do_signal_router:
-                self.signalize(cast(bool, self.config.TOUCHUP))
+                self.signalize(
+                    cast(bool, self.config.TOUCHUP) and self.state.primary
+                )
             if do_router:
                 self.finalize()
 
@@ -1709,7 +1711,11 @@ class Sanic(
             self.config.TOUCHUP = True
 
         # Setup routers
-        self.signalize(self.config.TOUCHUP)
+        # Only the primary application runs TouchUp (see below), which is
+        # what makes it safe to allow failures on missing builtin signals.
+        # Secondary applications must tolerate missing builtin signals
+        # since the shared protocol code may still dispatch them.
+        self.signalize(self.config.TOUCHUP and self.state.primary)
         self.finalize()
 
         route_names = [route.extra.ident for route in self.router.routes]

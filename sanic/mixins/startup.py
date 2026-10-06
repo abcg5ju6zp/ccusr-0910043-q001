@@ -774,20 +774,24 @@ class StartupMixin(metaclass=SanicMeta):
             kwargs["app_name"] = app.name
             kwargs["app_loader"] = app_loader
             kwargs["server_info"] = {}
-            kwargs["passthru"] = {
-                "auto_reload": app.auto_reload,
-                "state": {
-                    "verbosity": app.state.verbosity,
-                    "mode": app.state.mode,
-                },
-                "config": {
-                    "ACCESS_LOG": app.config.ACCESS_LOG,
-                    "NOISY_EXCEPTIONS": app.config.NOISY_EXCEPTIONS,
-                },
-                "shared_ctx": app.shared_ctx.__dict__,
-            }
+            kwargs["passthru"] = {}
             for app in apps:
                 kwargs["server_info"][app.name] = []
+                # Each application needs its own state hydrated inside of
+                # the worker processes so that mixed-mode applications do
+                # not leak configuration into one another
+                kwargs["passthru"][app.name] = {
+                    "auto_reload": app.auto_reload,
+                    "state": {
+                        "verbosity": app.state.verbosity,
+                        "mode": app.state.mode,
+                    },
+                    "config": {
+                        "ACCESS_LOG": app.config.ACCESS_LOG,
+                        "NOISY_EXCEPTIONS": app.config.NOISY_EXCEPTIONS,
+                    },
+                    "shared_ctx": app.shared_ctx.__dict__,
+                }
                 for server_info in app.state.server_info:
                     server_info.settings = {
                         k: v

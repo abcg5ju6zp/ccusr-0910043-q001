@@ -1,4 +1,5 @@
 import logging
+import socket
 
 from os import environ
 from unittest.mock import Mock, patch
@@ -6,6 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from sanic.app import Sanic
+from sanic.application.constants import Mode
 from sanic.worker.loader import AppLoader
 from sanic.worker.multiplexer import WorkerMultiplexer
 from sanic.worker.process import Worker, WorkerProcess
@@ -123,3 +125,89 @@ def test_serve_with_inspector(
     else:
         Inspector.assert_not_called()
         WorkerManager.manage.assert_not_called()
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture
+def two_apps():
+    app_one = Sanic("test_serve_one")
+    app_two = Sanic("test_serve_two")
+    yield app_one, app_two
+    Sanic._app_registry.clear()
+
+
+@patch("sanic.mixins.startup.WorkerManager")
+def test_serve_builds_passthru_for_each_app(WorkerManager: Mock, two_apps):
+    app_one, app_two = two_apps
+    app_one.prepare(host="127.0.0.1", port=_free_port(), dev=True, verbosity=1)
+    app_two.prepare(
+        host="127.0.0.1",
+        port=_free_port(),
+        verbosity=2,
+        access_log=False,
+    )
+
+    Sanic.serve(primary=app_one)
+
+    kwargs = WorkerManager.call_args[0][2]
+    passthru = kwargs["passthru"]
+    assert set(passthru.keys()) == {"test_serve_one", "test_serve_two"}
+
+    one = passthru["test_serve_one"]
+    assert one["state"]["mode"] is Mode.DEBUG
+    assert one["state"]["verbosity"] == 1
+    assert one["auto_reload"] is True
+    assert one["config"]["ACCESS_LOG"] is True
+    assert "shared_ctx" in one
+
+    two = passthru["test_serve_two"]
+    assert two["state"]["mode"] is Mode.PRODUCTION
+    assert two["state"]["verbosity"] == 2
+    assert two["auto_reload"] is False
+    assert two["config"]["ACCESS_LOG"] is False
+    assert "shared_ctx" in two
+
+
+def test_worker_serve_hydrates_each_app_with_own_passthru(app: Sanic):
+    other = Sanic("test_hydration_secondary")
+    passthru = {
+        app.name: {
+            "auto_reload": False,
+            "state": {"verbosity": 1, "mode": Mode.DEBUG},
+            "config": {"ACCESS_LOG": True, "NOISY_EXCEPTIONS": False},
+            "shared_ctx": {},
+        },
+        other.name: {
+            "auto_reload": True,
+            "state": {"verbosity": 3, "mode": Mode.DEBUG},
+            "config": {"ACCESS_LOG": False, "NOISY_EXCEPTIONS": True},
+            "shared_ctx": {"foo": "bar"},
+        },
+    }
+
+    with patch("sanic.worker.serve._serve_http_1"):
+        worker_serve(**args(app, passthru=passthru))
+
+    assert app.state.mode is Mode.DEBUG
+    assert app.state.verbosity == 1
+    assert app.state.auto_reload is False
+    assert app.config.ACCESS_LOG is True
+    assert app.config.NOISY_EXCEPTIONS is False
+
+    assert other.state.mode is Mode.DEBUG
+    assert other.state.verbosity == 3
+    assert other.state.auto_reload is True
+    assert other.config.ACCESS_LOG is False
+    assert other.config.NOISY_EXCEPTIONS is True
+    assert other.shared_ctx.foo == "bar"
+
+
+def test_worker_serve_without_passthru(app: Sanic):
+    with patch("sanic.worker.serve._serve_http_1"):
+        worker_serve(**args(app))
+    assert app.state.mode is Mode.PRODUCTION

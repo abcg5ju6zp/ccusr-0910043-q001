@@ -76,3 +76,29 @@ async def test_skip_touchup_non_reserved(app, caplog, skip_it, result):
     except NotFound:
         not_found_exception = True
     assert not_found_exception is result
+
+
+async def test_secondary_app_tolerates_missing_builtin_signals(app):
+    # Secondary applications never run TouchUp, so they cannot allow
+    # failures on missing builtin signals. Otherwise, a multi-app serve
+    # with mixed modes would crash on unregistered http.* dispatches.
+    app.state.primary = False
+    await app._startup()
+    assert app.signal_router.allow_fail_builtin is False
+    for signal in RESERVED_NAMESPACES["http"]:
+        assert await app.dispatch(event=signal, inline=True) is None
+
+
+async def test_secondary_app_amend_keeps_tolerating_builtin_signals(app):
+    app.state.primary = False
+    await app._startup()
+
+    @app.signal("http.lifecycle.begin")
+    def sync_signal(*_): ...
+
+    assert app.signal_router.allow_fail_builtin is False
+
+
+async def test_primary_app_allows_fail_builtin_when_touchup(app):
+    await app._startup()
+    assert app.signal_router.allow_fail_builtin is True
